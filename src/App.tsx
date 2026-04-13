@@ -107,7 +107,7 @@ export default function App() {
   const [lastSyncTime, setLastSyncTime] = useState<string | null>(null);
 
   const activeFundedPOs = pos.filter(
-    p => (p.status === 'Funded' || p.status === 'Completed') && p.visibility !== 'Funded(Original)'
+    p => (p.status === 'Funded' || p.status === 'Completed') && p.visibility === 'Funded'
   );
 
   const handleSort = (key: string) => {
@@ -1124,7 +1124,8 @@ export default function App() {
 
       setIsSubmitting(true);
       try {
-        const contractId = `con-${Math.random().toString(36).substr(2, 6).toUpperCase()}`;
+        const existingDraft = contracts.find(c => c.reservationId === resId && !c.originalPoId);
+        const contractId = existingDraft?.id || `con-${Math.random().toString(36).substr(2, 6).toUpperCase()}`;
         const newContract: Contract = {
           id: contractId,
           reservationId: reservation.id,
@@ -1137,7 +1138,7 @@ export default function App() {
         };
         
         // 1. Create contract
-        await setDoc(doc(db, 'contracts', contractId), newContract)
+        await setDoc(doc(db, 'contracts', contractId), newContract, { merge: true })
           .catch(err => handleFirestoreError(err, 'write', `contracts/${contractId}`));
 
         // 2. Update reservation
@@ -1958,18 +1959,6 @@ export default function App() {
                     <p className="mono-label !text-zinc-400">
                       {contract?.status === 'Executed' ? 'Executed' : contract?.status === 'Signed' ? 'Funded' : contract?.status === 'Sent' ? 'Awaiting Sign' : 'Drafting'}
                     </p>
-                    {contract?.status === 'Executed' && (
-                      <button 
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (contract.signedDocumentUrl) window.open(contract.signedDocumentUrl, '_blank');
-                          else alert('Signed document not available yet.');
-                        }}
-                        className="text-[10px] font-bold text-ink underline underline-offset-8 hover:text-zinc-500 transition-all uppercase tracking-widest"
-                      >
-                        View Agreement
-                      </button>
-                    )}
                   </div>
                   <div className="text-right space-y-2">
                     <p className="text-2xl font-light tracking-tighter text-ink">${total.toLocaleString()}</p>
@@ -2367,8 +2356,8 @@ export default function App() {
                             >
                               <option value="Published">Published</option>
                               <option value="Hidden">Hidden</option>
-                              <option value="Funded(Original)" disabled className="text-stone-400">Funded(Original)</option>
-                              <option value="Funded" disabled className="text-stone-400">Funded</option>
+                              <option value="Funded(Original)">Funded(Original)</option>
+                              <option value="Funded">Funded</option>
                             </select>
                           </td>
                           <td className="px-6 py-4 text-right">
@@ -2679,7 +2668,7 @@ export default function App() {
                                         className="btn-premium flex items-center gap-2"
                                       >
                                         <Upload size={14} />
-                                        Upload Signed
+                                        Upload Signed contract
                                       </button>
                                     )}
                                     <button
