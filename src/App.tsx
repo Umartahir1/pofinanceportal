@@ -1421,12 +1421,17 @@ export default function App() {
 
     setIsSyncing(true);
     try {
-      // 1. Mark contract as Executed
-      await updateDoc(doc(db, 'contracts', contractId), {
+      const contractUpdates: any = {
         status: 'Executed',
-        signedDocumentUrl: signedUrl || '#',
         signedAt: new Date().toISOString()
-      }).catch(err => handleFirestoreError(err, 'write', `contracts/${contractId}`));
+      };
+      if (signedUrl) {
+        contractUpdates.signedDocumentUrl = signedUrl;
+      }
+
+      // 1. Mark contract as Executed
+      await updateDoc(doc(db, 'contracts', contractId), contractUpdates)
+        .catch(err => handleFirestoreError(err, 'write', `contracts/${contractId}`));
 
       // 2. If this is a post-finalize contract (has originalPoId), ensure the reissued PO
       //    is in Firestore with Funded status so it appears in Financials immediately.
@@ -2678,7 +2683,7 @@ export default function App() {
                                 ) : (
                                   /* ── NEW CONTRACT (post-finalize): Upload/View Signed + Rollback ── */
                                   <>
-                                    {contract.signedDocumentUrl ? (
+                                    {hasUsableDocumentUrl(contract.signedDocumentUrl) ? (
                                       <button
                                         onClick={() => {
                                           const link = document.createElement('a');
@@ -3249,7 +3254,14 @@ export default function App() {
                 {/* Lender contract actions — shown when lender has a reservation on this PO */}
                 {viewMode === 'lender' && (() => {
                   const myRes = reservations.find(r => r.poId === selectedPO.id && r.investorId === currentLender?.id && r.status !== 'Rejected');
-                  const myContract = myRes ? contracts.find(c => c.reservationId === myRes.id && !contracts.some(other => other.originalPoId === c.id)) : null;
+                  let myContract: Contract | null = null;
+                  if (myRes) {
+                    myContract =
+                      contracts.find(c => c.poId === selectedPO.id && c.reservationId === myRes.id) ||
+                      contracts.find(c => c.poId === selectedPO.id) ||
+                      contracts.find(c => c.reservationId === myRes.id && !contracts.some(other => other.originalPoId === c.id)) ||
+                      null;
+                  }
                   if (!myRes || !myContract) return null;
                   return (
                     <div className="mb-10 p-6 bg-stone-50 rounded-2xl border border-stone-100 space-y-4">
