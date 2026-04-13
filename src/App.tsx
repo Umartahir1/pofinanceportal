@@ -275,6 +275,26 @@ export default function App() {
     return total.toLocaleString(undefined, { minimumFractionDigits: 2 });
   };
 
+  // Temporary: expose Firestore fix function on window for console use
+  useEffect(() => {
+    (window as any).__fixReservations = async () => {
+      const snap = await getDocs(collection(db, 'reservations'));
+      const results: string[] = [];
+      for (const d of snap.docs) {
+        const data = d.data();
+        results.push(`${d.id} poId=${data.poId} status=${data.status}`);
+      }
+      console.log(results.join('\n'));
+      return results;
+    };
+    (window as any).__setReservationStatus = async (resId: string, status: string, poId?: string) => {
+      const updates: any = { status };
+      if (poId) updates.poId = poId;
+      await updateDoc(doc(db, 'reservations', resId), updates);
+      console.log(`Updated ${resId} -> status:${status}${poId ? ` poId:${poId}` : ''}`);
+    };
+  }, []);
+
   const handleAcumaticaSync = async () => {
     setIsSyncing(true);
     try {
@@ -1030,7 +1050,10 @@ export default function App() {
         originalPoId: contract.poId
       }).catch(err => handleFirestoreError(err, 'write', `reservations/${reservation.id}`));
 
-      alert(`Contract finalized. Original PO ${po.poNumber} canceled. New PO ${reissueData.newPo} created with ${reservation.paymentOption.interest}% markup. Press Sync to pull the new PO into the portal.`);
+      const cancelMsg = reissueData.cancelWarning
+        ? `\n\n⚠️ ${reissueData.cancelWarning}`
+        : ` Original PO ${po.poNumber} has been cancelled.`;
+      alert(`Contract finalized. New PO ${reissueData.newPo} created with ${reservation.paymentOption.interest}% markup.${cancelMsg}`);
     } catch (error: any) {
       console.error('Finalize contract error:', error);
       alert(`Failed to finalize contract: ${error.message}`);
@@ -1275,26 +1298,70 @@ export default function App() {
     const contract = contracts.find(c => c.id === contractId);
     if (!contract) return;
 
-    const originalPo = pos.find(p => p.reissuedPoId === contract.poId);
-    const po = pos.find(p => p.id === contract.poId || (originalPo && p.id === originalPo.id));
-    const reservation = reservations.find(r => r.id === contract.reservationId || (originalPo && r.poId === originalPo.id));
-    const investor = investors.find(i => i.id === contract.investorId);
-
-    if (!po || !reservation || !investor) {
-      alert('Missing data to sign contract.');
-      return;
-    }
-
     setIsSyncing(true);
     try {
-      // Just update the contract status to Executed and save the URL
+      // 1. Mark contract as Executed
       await updateDoc(doc(db, 'contracts', contractId), {
         status: 'Executed',
         signedDocumentUrl: signedUrl || '#',
         signedAt: new Date().toISOString()
       }).catch(err => handleFirestoreError(err, 'write', `contracts/${contractId}`));
 
-      alert('Contract signed and uploaded successfully.');
+      // 2. If this is a post-finalize contract (has originalPoId), ensure the reissued PO
+      //    is in Firestore with Funded status so it appears in Financials immediately.
+      if (contract.originalPoId) {
+        const reissuedPoId = contract.poId; // e.g. "PO010300"
+        const originalPoDoc = pos.find(p => p.id === contract.originalPoId);
+        const reissuedPoDoc = pos.find(p => p.id === reissuedPoId);
+        const reservation = reservations.find(r => r.id === contract.reservationId);
+
+        // Build the reissued PO data — use existing doc if present, else derive from original
+        const base = reissuedPoDoc || originalPoDoc;
+        if (base) {
+          const markupMultiplier = reservation
+            ? 1 + (reservation.paymentOption.interest / 100)
+            : 1;
+          const reissuedPOData: any = {
+            id: reissuedPoId,
+            poNumber: reissuedPoId,
+            vendor: base.vendor,
+            vendorName: base.vendorName,
+            amount: reissuedPoDoc?.amount ?? Number((base.amount * markupMultiplier).toFixed(2)),
+            totalQuantity: base.totalQuantity,
+            orderQty: base.orderQty,
+            openQty: base.openQty,
+            description: reissuedPoDoc?.description ?? `Finance Portal - ${base.description}`,
+            date: reissuedPoDoc?.date ?? base.date,
+            location: base.location,
+            owner: 'Acumatica Sync',
+            items: reissuedPoDoc?.items ?? base.items.map((item: any) => ({
+              ...item,
+              unitCost: Number((item.unitCost * markupMultiplier).toFixed(2)),
+              extCost: Number((item.extCost * markupMultiplier).toFixed(2))
+            })),
+            status: 'Funded',
+            visibility: 'Funded',
+            isPublished: false,
+            reservedBy: contract.investorId,
+            reservationStatus: 'Completed',
+            originalPoId: contract.originalPoId,
+            originalPoNumber: originalPoDoc?.poNumber
+          };
+          await setDoc(doc(db, 'purchaseOrders', reissuedPoId), reissuedPOData, { merge: true })
+            .catch(err => handleFirestoreError(err, 'write', `purchaseOrders/${reissuedPoId}`));
+        }
+
+        // 3. Also ensure original PO is marked Funded(Original) and hidden
+        if (originalPoDoc) {
+          await updateDoc(doc(db, 'purchaseOrders', originalPoDoc.id), {
+            status: 'Funded',
+            visibility: 'Funded(Original)',
+            isPublished: false,
+          }).catch(err => handleFirestoreError(err, 'write', `purchaseOrders/${originalPoDoc.id}`));
+        }
+      }
+
+      alert('Signed agreement uploaded. The PO is now visible in Financials.');
     } catch (error: any) {
       console.error('Error executing contract:', error);
       alert(`Failed to execute contract: ${error.message}`);
@@ -2062,44 +2129,6 @@ export default function App() {
           </div>
         </div>
 
-      {adminSubTab === 'inventory' && (
-        <div className="max-w-7xl mx-auto w-full px-12 mb-6 flex justify-end relative">
-          <button
-            onClick={() => setFilterDropdownOpen(!filterDropdownOpen)}
-            className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-[9px] font-mono uppercase tracking-widest border border-stone-200 text-stone-600 hover:bg-stone-50 transition-all bg-white shadow-sm"
-          >
-            <Filter size={10} />
-            Visibility
-            <ChevronDown size={10} className={`transition-transform ${filterDropdownOpen ? 'rotate-180' : ''}`} />
-          </button>
-          
-          {filterDropdownOpen && (
-            <div className="absolute top-full right-0 mt-1 w-28 bg-white border border-stone-200 rounded-lg shadow-lg z-50 p-0.5">
-              {['All', 'Published', 'Hidden', 'Funded(Original)', 'Funded'].map(v => (
-                <label key={v} className="flex items-center gap-1 px-1.5 py-0.5 hover:bg-stone-50 rounded cursor-pointer group">
-                  <input
-                    type="checkbox"
-                    checked={v === 'All' ? visibilityFilter.length === 4 : visibilityFilter.includes(v)}
-                    onChange={() => {
-                      if (v === 'All') {
-                        setVisibilityFilter(visibilityFilter.length === 4 ? [] : ['Published', 'Hidden', 'Funded(Original)', 'Funded']);
-                      } else {
-                        if (visibilityFilter.includes(v)) {
-                          setVisibilityFilter(visibilityFilter.filter(f => f !== v));
-                        } else {
-                          setVisibilityFilter([...visibilityFilter, v]);
-                        }
-                      }
-                    }}
-                    className="w-2 h-2 rounded-sm border-stone-300 text-ink focus:ring-ink"
-                  />
-                  <span className="text-[7px] font-mono uppercase tracking-wider text-stone-600 group-hover:text-ink truncate">{v}</span>
-                </label>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
 
       <AnimatePresence mode="wait">
           <motion.div
@@ -2151,7 +2180,46 @@ export default function App() {
                             {sortConfig.key === 'visibility' && (sortConfig.direction === 'asc' ? <ArrowUp size={12} /> : sortConfig.direction === 'desc' ? <ArrowDown size={12} /> : null)}
                           </div>
                         </th>
-                        <th className="px-6 py-4 text-right">Actions</th>
+                        <th className="px-6 py-4 text-right">
+                          <div className="flex items-center justify-end gap-3">
+                            <div className="relative">
+                              <button
+                                onClick={() => setFilterDropdownOpen(!filterDropdownOpen)}
+                                className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[7px] font-mono uppercase tracking-widest border border-stone-200 text-stone-500 hover:bg-stone-50 transition-all bg-white"
+                              >
+                                <Filter size={7} />
+                                Visibility
+                                <ChevronDown size={7} className={`transition-transform ${filterDropdownOpen ? 'rotate-180' : ''}`} />
+                              </button>
+                              {filterDropdownOpen && (
+                                <div className="absolute top-full right-0 mt-1 w-28 bg-white border border-stone-200 rounded-lg shadow-lg z-50 p-0.5">
+                                  {['All', 'Published', 'Hidden', 'Funded(Original)', 'Funded'].map(v => (
+                                    <label key={v} className="flex items-center gap-1 px-1.5 py-0.5 hover:bg-stone-50 rounded cursor-pointer group">
+                                      <input
+                                        type="checkbox"
+                                        checked={v === 'All' ? visibilityFilter.length === 4 : visibilityFilter.includes(v)}
+                                        onChange={() => {
+                                          if (v === 'All') {
+                                            setVisibilityFilter(visibilityFilter.length === 4 ? [] : ['Published', 'Hidden', 'Funded(Original)', 'Funded']);
+                                          } else {
+                                            if (visibilityFilter.includes(v)) {
+                                              setVisibilityFilter(visibilityFilter.filter(f => f !== v));
+                                            } else {
+                                              setVisibilityFilter([...visibilityFilter, v]);
+                                            }
+                                          }
+                                        }}
+                                        className="w-2 h-2 rounded-sm border-stone-300 text-ink focus:ring-ink"
+                                      />
+                                      <span className="text-[7px] font-mono uppercase tracking-wider text-stone-600 group-hover:text-ink truncate">{v}</span>
+                                    </label>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                            <span>Actions</span>
+                          </div>
+                        </th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-stone-100">
@@ -2208,32 +2276,10 @@ export default function App() {
                               <option value="Funded" disabled className="text-stone-400">Funded</option>
                             </select>
                           </td>
-                          <td className="px-6 py-4 text-right" onClick={(e) => e.stopPropagation()}>
-                            <div className="flex items-center justify-end gap-1">
-                              <button
-                                onClick={async (e) => {
-                                  e.stopPropagation();
-                                  if (confirm(`Permanently delete PO ${po.poNumber}? This cannot be undone.`)) {
-                                    try {
-                                      await deleteDoc(doc(db, 'purchaseOrders', po.id));
-                                    } catch (err) {
-                                      console.error('Error deleting PO:', err);
-                                      alert('Failed to delete PO.');
-                                    }
-                                  }
-                                }}
-                                className="text-stone-300 hover:text-rose-500 transition-colors p-1.5 hover:bg-rose-50 rounded-full"
-                                title="Delete PO"
-                              >
-                                <Trash2 size={14} />
-                              </button>
-                              <button
-                                onClick={(e) => { e.stopPropagation(); setSelectedPO(po); setReservationAmount(po.amount); }}
-                                className="text-stone-300 hover:text-ink transition-colors p-1.5 hover:bg-stone-50 rounded-full"
-                              >
-                                <ChevronRight size={16} />
-                              </button>
-                            </div>
+                          <td className="px-6 py-4 text-right">
+                            <button className="text-stone-300 hover:text-ink transition-colors p-1.5 hover:bg-stone-50 rounded-full">
+                              <ChevronRight size={16} />
+                            </button>
                           </td>
                         </tr>
                       ))}
@@ -2340,42 +2386,6 @@ export default function App() {
 
             {adminSubTab === 'legal' && (
               <div className="space-y-10">
-                <div className="relative mb-6">
-                  <button
-                    onClick={() => setLegalDropdownOpen(!legalDropdownOpen)}
-                    className="flex items-center gap-1.5 px-2 py-1 rounded-md text-[8px] font-mono uppercase tracking-widest border border-stone-200 text-stone-600 hover:bg-stone-50 transition-all bg-white shadow-sm"
-                  >
-                    <Filter size={8} />
-                    Status
-                    <ChevronDown size={8} className={`transition-transform ${legalDropdownOpen ? 'rotate-180' : ''}`} />
-                  </button>
-                  
-                  {legalDropdownOpen && (
-                    <div className="absolute top-full left-0 mt-1 w-32 bg-white border border-stone-200 rounded-lg shadow-lg z-50 p-0.5">
-                      {['All', 'Funded(Original)', 'Funded'].map(v => (
-                        <label key={v} className="flex items-center gap-1 px-1.5 py-0.5 hover:bg-stone-50 rounded cursor-pointer group">
-                          <input
-                            type="checkbox"
-                            checked={legalFilter.includes(v)}
-                            onChange={() => {
-                              if (v === 'All') {
-                                setLegalFilter(legalFilter.includes('All') ? [] : ['All', 'Funded(Original)', 'Funded']);
-                              } else {
-                                if (legalFilter.includes(v)) {
-                                  setLegalFilter(legalFilter.filter(f => f !== v && f !== 'All'));
-                                } else {
-                                  setLegalFilter([...legalFilter.filter(f => f !== 'All'), v]);
-                                }
-                              }
-                            }}
-                            className="w-2 h-2 rounded-sm border-stone-300 text-ink focus:ring-ink"
-                          />
-                          <span className="text-[7px] font-mono uppercase tracking-wider text-stone-600 group-hover:text-ink truncate">{v}</span>
-                        </label>
-                      ))}
-                    </div>
-                  )}
-                </div>
                 <div className="premium-card overflow-hidden">
                   <table className="w-full text-left border-collapse">
                     <thead>
@@ -2404,7 +2414,46 @@ export default function App() {
                             {sortConfig.key === 'status' && (sortConfig.direction === 'asc' ? <ArrowUp size={12} /> : sortConfig.direction === 'desc' ? <ArrowDown size={12} /> : null)}
                           </div>
                         </th>
-                        <th className="px-10 py-6 text-right">Actions</th>
+                        <th className="px-10 py-6 text-right">
+                          <div className="flex items-center justify-end gap-3">
+                            <div className="relative">
+                              <button
+                                onClick={() => setLegalDropdownOpen(!legalDropdownOpen)}
+                                className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[7px] font-mono uppercase tracking-widest border border-stone-200 text-stone-500 hover:bg-stone-50 transition-all bg-white"
+                              >
+                                <Filter size={7} />
+                                Status
+                                <ChevronDown size={7} className={`transition-transform ${legalDropdownOpen ? 'rotate-180' : ''}`} />
+                              </button>
+                              {legalDropdownOpen && (
+                                <div className="absolute top-full right-0 mt-1 w-32 bg-white border border-stone-200 rounded-lg shadow-lg z-50 p-0.5">
+                                  {['All', 'Funded(Original)', 'Funded'].map(v => (
+                                    <label key={v} className="flex items-center gap-1 px-1.5 py-0.5 hover:bg-stone-50 rounded cursor-pointer group">
+                                      <input
+                                        type="checkbox"
+                                        checked={legalFilter.includes(v)}
+                                        onChange={() => {
+                                          if (v === 'All') {
+                                            setLegalFilter(legalFilter.includes('All') ? [] : ['All', 'Funded(Original)', 'Funded']);
+                                          } else {
+                                            if (legalFilter.includes(v)) {
+                                              setLegalFilter(legalFilter.filter(f => f !== v && f !== 'All'));
+                                            } else {
+                                              setLegalFilter([...legalFilter.filter(f => f !== 'All'), v]);
+                                            }
+                                          }
+                                        }}
+                                        className="w-2 h-2 rounded-sm border-stone-300 text-ink focus:ring-ink"
+                                      />
+                                      <span className="text-[7px] font-mono uppercase tracking-wider text-stone-600 group-hover:text-ink truncate">{v}</span>
+                                    </label>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                            <span>Actions</span>
+                          </div>
+                        </th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-stone-100">
@@ -2561,10 +2610,11 @@ export default function App() {
                                             // 3. Delete this new (post-finalize) contract
                                             await deleteDoc(doc(db, 'contracts', contract.id));
 
-                                            // 4. Reset reservation back to original PO
+                                            // 4. Reset reservation back to original PO and pending
                                             if (reservation && originalPo) {
                                               await updateDoc(doc(db, 'reservations', reservation.id), {
                                                 poId: originalPo.id,
+                                                status: 'Pending',
                                                 originalPoId: deleteField()
                                               });
                                             }
