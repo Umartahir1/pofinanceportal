@@ -334,11 +334,14 @@ export default function App() {
         const calculatedOpenQty = items.reduce((acc: number, item: any) => acc + Math.max(0, item.quantity - item.qtyOnReceipts), 0);
         const orderTotal = po.OrderTotal?.value || 0;
 
+        const linkedOriginalPoId = existingPO?.originalPoId || originalLinkedPO?.id;
+        const linkedOriginalPoNumber = existingPO?.originalPoNumber || originalLinkedPO?.poNumber;
+
         return {
           id: po.OrderNbr?.value,
           poNumber: po.OrderNbr?.value,
-          originalPoId: existingPO?.originalPoId || originalLinkedPO?.id,
-          originalPoNumber: existingPO?.originalPoNumber || originalLinkedPO?.poNumber,
+          ...(linkedOriginalPoId ? { originalPoId: linkedOriginalPoId } : {}),
+          ...(linkedOriginalPoNumber ? { originalPoNumber: linkedOriginalPoNumber } : {}),
           vendor: vendorId,
           vendorName: vendorName,
           amount: orderTotal,
