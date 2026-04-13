@@ -1,0 +1,5 @@
+{
+  "name": "PO Finance & Investor Portal",
+  "description": "A comprehensive platform for managing purchase order financing, investor bids, and automated legal contract generation. Features Google Authentication with domain-based role assignment (admin for @svjbrands.com, lender for others).",
+  "requestFramePermissions": []
+}

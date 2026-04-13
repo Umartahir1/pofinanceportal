@@ -1,0 +1,137 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: purchaseOrders
+    // Fields: id, poNumber, vendor, amount, totalQuantity, status, description, date, location, owner, isPublished, reservedBy, reservationStatus, lastSynced
+    //
+    // Collection: investors
+    // Fields: id, name, contactName, email, address, vendorId, totalInvested, activeReservations
+    //
+    // Collection: reservations
+    // Fields: id, poId, investorId, amount, paymentOption, status, timestamp, paymentStatus
+    //
+    // Collection: contracts
+    // Fields: id, reservationId, poId, investorId, generatedDate, status, content, docusignEnvelopeId, signedAt
+    //
+    // Collection: config
+    // Fields: lastAcumaticaSync
+    //
+    // Collection: vendors
+    // Fields: id, vendorId, vendorName, lastSynced
+    //
+    // Collection: users
+    // Fields: uid, email, role
+    //
+    // Collection: transactions
+    // Fields: id, date, description, amount, type, linkedPoId
+    //
+    // ===============================================================
+
+    // Helper Functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && 
+        (request.auth.token.email == "umar.tahir@svjbrands.com" ||
+         request.auth.token.email.matches(".*@svjbrands\\.com$") ||
+         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'));
+    }
+
+    function isRecent(time) {
+      return time is timestamp &&
+             time > request.time - duration.value(10, 'm') &&
+             time < request.time + duration.value(10, 'm');
+    }
+
+    function isValidEmail(email) {
+      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    function isValidUser(data) {
+      return data.uid is string && data.uid == request.auth.uid &&
+             data.email is string && isValidEmail(data.email) &&
+             data.role in ['admin', 'lender'] &&
+             (data.role == 'lender' || 
+              request.auth.token.email.matches(".*@svjbrands\\.com$") ||
+              request.auth.token.email == "umar.tahir@svjbrands.com");
+    }
+
+    function isValidInvestor(data) {
+      return data.name is string && data.name.size() > 0 &&
+             data.email is string && isValidEmail(data.email) &&
+             (!('address' in data) || (data.address is string && data.address.size() > 0));
+    }
+
+    // Users
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow create: if isOwner(userId) && isValidUser(request.resource.data);
+      allow update: if isAdmin() || (isOwner(userId) && request.resource.data.role == resource.data.role);
+    }
+
+    // Purchase Orders
+    match /purchaseOrders/{poId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+      // Allow lenders to update reservation status
+      allow update: if isAuthenticated() && 
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reservedBy', 'reservationStatus']);
+    }
+
+    // Investors
+    match /investors/{investorId} {
+      allow read: if isAuthenticated();
+      allow create: if isOwner(investorId) && isValidInvestor(request.resource.data);
+      allow update: if (isOwner(investorId) && isValidInvestor(request.resource.data)) || isAdmin();
+    }
+
+    // Reservations
+    match /reservations/{resId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && request.resource.data.investorId == request.auth.uid;
+      allow update, delete: if isAdmin();
+    }
+
+    // Contracts
+    match /contracts/{contractId} {
+      allow read: if isAuthenticated();
+      allow write, delete: if isAdmin();
+    }
+
+    // Config
+    match /config/{docId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    // Vendors
+    match /vendors/{vendorId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    // Transactions
+    match /transactions/{txId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    // Sync Logs
+    match /syncLogs/{logId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+  }
+}

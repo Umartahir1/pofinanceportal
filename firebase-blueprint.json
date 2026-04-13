@@ -1,0 +1,164 @@
+{
+  "entities": {
+    "PurchaseOrder": {
+      "title": "PurchaseOrder",
+      "description": "Purchase orders synced from Acumatica",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "poNumber": { "type": "string" },
+        "vendor": { "type": "string" },
+        "amount": { "type": "number" },
+        "totalQuantity": { "type": "number" },
+        "status": { "type": "string" },
+        "description": { "type": "string" },
+        "date": { "type": "string" },
+        "location": { "type": "string" },
+        "owner": { "type": "string" },
+        "isPublished": { "type": "boolean" },
+        "reservedBy": { "type": "string" },
+        "reservationStatus": { "type": "string" },
+        "lastSynced": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "poNumber", "vendor", "amount"]
+    },
+    "InvestorProfile": {
+      "title": "InvestorProfile",
+      "description": "Lender/Vendor profile information",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "contactName": { "type": "string" },
+        "email": { "type": "string" },
+        "address": { "type": "string" },
+        "vendorId": { "type": "string" },
+        "totalInvested": { "type": "number" },
+        "activeReservations": { "type": "number" }
+      },
+      "required": ["id", "name", "email"]
+    },
+    "Reservation": {
+      "title": "Reservation",
+      "description": "Lender reservations on purchase orders",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "poId": { "$ref": "PurchaseOrder" },
+        "investorId": { "$ref": "InvestorProfile" },
+        "amount": { "type": "number" },
+        "status": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "paymentOption": { "$ref": "PaymentOption" }
+      },
+      "required": ["id", "poId", "investorId", "amount"]
+    },
+    "Contract": {
+      "title": "Contract",
+      "description": "Legal agreements between lender and consignee",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "reservationId": { "$ref": "Reservation" },
+        "poId": { "$ref": "PurchaseOrder" },
+        "investorId": { "$ref": "InvestorProfile" },
+        "generatedDate": { "type": "string", "format": "date-time" },
+        "status": { "type": "string", "enum": ["Draft", "Sent", "Executed"] },
+        "content": { "type": "string" },
+        "unsignedDocumentUrl": { "type": "string" },
+        "signedDocumentUrl": { "type": "string" },
+        "docusignEnvelopeId": { "type": "string" },
+        "signedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "reservationId", "poId", "investorId", "status"]
+    },
+    "Transaction": {
+      "title": "Transaction",
+      "description": "Bank transactions and payments",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "date": { "type": "string", "format": "date" },
+        "description": { "type": "string" },
+        "amount": { "type": "number" },
+        "type": { "type": "string", "enum": ["Credit", "Debit"] },
+        "linkedPoId": { "$ref": "PurchaseOrder" }
+      },
+      "required": ["id", "date", "description", "amount", "type"]
+    },
+    "PaymentOption": {
+      "title": "PaymentOption",
+      "type": "object",
+      "properties": {
+        "label": { "type": "string" },
+        "days": { "type": "number" },
+        "interest": { "type": "number" }
+      }
+    },
+    "SystemConfig": {
+      "title": "SystemConfig",
+      "description": "System-wide configuration and sync status",
+      "type": "object",
+      "properties": {
+        "lastAcumaticaSync": { "type": "string", "format": "date-time" }
+      }
+    },
+    "Vendor": {
+      "title": "Vendor",
+      "description": "Suppliers/Vendors from Acumatica",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "vendorId": { "type": "string" },
+        "vendorName": { "type": "string" },
+        "lastSynced": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "vendorId", "vendorName"]
+    },
+    "User": {
+      "title": "User",
+      "description": "System users and roles",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "role": { "type": "string", "enum": ["admin", "lender"] }
+      },
+      "required": ["uid", "email", "role"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "Collection of system users"
+    },
+    "/purchaseOrders/{poId}": {
+      "schema": "PurchaseOrder",
+      "description": "Collection of purchase orders"
+    },
+    "/investors/{investorId}": {
+      "schema": "InvestorProfile",
+      "description": "Collection of investor profiles"
+    },
+    "/reservations/{resId}": {
+      "schema": "Reservation",
+      "description": "Collection of reservations"
+    },
+    "/config/system": {
+      "schema": "SystemConfig",
+      "description": "System configuration"
+    },
+    "/vendors/{vendorId}": {
+      "schema": "Vendor",
+      "description": "Collection of suppliers/vendors"
+    },
+    "/contracts/{contractId}": {
+      "schema": "Contract",
+      "description": "Collection of legal contracts"
+    },
+    "/transactions/{txId}": {
+      "schema": "Transaction",
+      "description": "Collection of bank transactions"
+    }
+  }
+}

@@ -1,0 +1,202 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Playfair+Display:ital,wght@0,400..900;1,400..900&family=JetBrains+Mono:wght@400;500&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Playfair Display", ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --color-ink: #27272a;
+  --color-stone-50: #fcfcfb;
+  --color-stone-100: #f5f5f4;
+  --color-stone-200: #e7e7e4;
+}
+
+:root {
+  --form-background-color: #fcfcfb;
+  --form-text-color: #27272a;
+  --form-border-color: #e7e7e4;
+  --form-input-background-color: #ffffff;
+  --form-input-text-color: #27272a;
+  --form-input-border-color: #e7e7e4;
+  --form-button-background-color: #27272a;
+  --form-button-text-color: #ffffff;
+  --form-button-hover-background-color: #3f3f46;
+  --form-button-border-radius: 16px;
+  --form-input-border-radius: 16px;
+  --form-container-border-radius: 32px;
+  --form-container-max-width: 940px;
+  --form-container-padding: 48px;
+  --form-gap: 20px;
+  --form-title-font-size: 42px;
+  --form-description-font-size: 16px;
+  --form-label-font-size: 12px;
+  --form-input-font-size: 15px;
+}
+
+body {
+  background-color: var(--form-background-color);
+  color: var(--form-text-color);
+  min-height: 100vh;
+  @apply font-sans antialiased;
+}
+
+/* Typography Helpers */
+.display-text {
+  @apply font-serif text-5xl md:text-6xl font-medium tracking-tight leading-[1.1];
+}
+
+.mono-label {
+  @apply font-mono text-[10px] uppercase tracking-[0.2em] font-medium opacity-60;
+}
+
+/* Layout Components */
+.portal-container {
+  background: var(--form-input-background-color);
+  border: 1px solid var(--form-border-color);
+  border-radius: var(--form-container-border-radius);
+  max-width: var(--form-container-max-width);
+  width: 100%;
+  margin: 40px auto;
+  padding: var(--form-container-padding);
+  box-shadow: 0 4px 20px rgba(0,0,0,0.02);
+}
+
+h1, h2, h3 {
+  color: var(--form-text-color);
+  letter-spacing: -0.02em;
+}
+
+label {
+  color: var(--form-text-color);
+  font-weight: 600;
+  font-size: var(--form-label-font-size);
+  margin-bottom: 10px;
+  display: block;
+  @apply font-mono uppercase tracking-widest opacity-50;
+}
+
+/* Form Elements */
+input,
+select,
+textarea {
+  background: #f9f9f8;
+  color: var(--form-input-text-color);
+  border: 1px solid var(--form-input-border-color);
+  border-radius: var(--form-input-border-radius);
+  min-height: 56px;
+  padding: 12px 20px;
+  width: 100%;
+  font-size: var(--form-input-font-size);
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Premium UI Components */
+.premium-card {
+  @apply bg-white border border-stone-200/60 rounded-3xl shadow-sm transition-all duration-300;
+  overflow: visible;
+}
+
+.premium-card:hover {
+  @apply border-stone-300/80 shadow-md;
+}
+
+.premium-table-header {
+  @apply bg-stone-50/50 border-b border-stone-100;
+}
+
+.premium-table-header th {
+  @apply text-[10px] font-mono uppercase tracking-[0.2em] text-stone-400 font-medium;
+}
+
+.premium-table-row {
+  @apply transition-all duration-200;
+}
+
+.premium-table-row:hover {
+  @apply bg-stone-50/80;
+}
+
+.mono-label {
+  @apply text-[10px] font-mono uppercase tracking-[0.2em] text-stone-400 font-medium;
+}
+
+.mono-value {
+  @apply font-mono text-[11px] tracking-wider;
+}
+
+.display-text {
+  @apply font-serif text-4xl tracking-tight text-ink;
+}
+
+/* Fix for overlapping icons in login */
+.input-with-icon {
+  padding-left: 4rem !important;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  outline: none;
+  background: #ffffff;
+  border-color: var(--form-button-background-color);
+  box-shadow: 0 0 0 4px rgba(11, 11, 12, 0.03);
+}
+
+button {
+  min-height: 56px;
+  border: none;
+  border-radius: var(--form-button-border-radius);
+  background: var(--form-button-background-color);
+  color: var(--form-button-text-color);
+  font-weight: 600;
+  padding: 0 32px;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  cursor: pointer;
+  @apply flex items-center justify-center gap-3;
+}
+
+button:hover:not(:disabled) {
+  background: var(--form-button-hover-background-color);
+  transform: translateY(-1px);
+  box-shadow: 0 10px 20px rgba(0,0,0,0.1);
+}
+
+button:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #e7e7e4;
+  border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #d1d1ce;
+}
+
+.nav-home-button {
+  @apply relative overflow-hidden;
+}
+
+.nav-home-button::after {
+  content: '';
+  @apply absolute inset-0 bg-ink opacity-0 transition-opacity duration-200;
+}
+
+.nav-home-button:hover::after {
+  @apply opacity-[0.03];
+}

@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__Claude_Preview__preview_start",
+      "Read(//usr/local/bin/**)",
+      "Read(//Users/Lenovo/.nvm/versions/**)",
+      "Bash(command -v npm)",
+      "Read(//opt/homebrew/bin/**)",
+      "Read(//opt/**)",
+      "Read(//Users/Lenovo/.local/bin/**)",
+      "Read(//Users/Lenovo/.local/**)",
+      "Read(//Library/Developer/CommandLineTools/usr/bin/**)",
+      "Read(//Applications/**)",
+      "Bash(brew --prefix)",
+      "Bash(pkgutil --pkgs)",
+      "Bash(kill 39071)",
+      "Bash(node delete-po.mjs)"
+    ]
+  }
+}
