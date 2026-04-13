@@ -435,12 +435,11 @@ async function startServer() {
         const originalDescription = originalPo.Description?.value || "";
         const originalBranch = originalPo.Branch?.value || "PACK";
         
-        // 2. Cancel original PO (hard requirement)
+        // 2. Cancel original PO (RemoveHold first, then CancelOrder — non-fatal if PO has receipts/bills)
         await callPurchaseOrderAction(normalizedBaseUrl, cookies, "RemoveHold", poNumber);
         const cancelOriginal = await callPurchaseOrderAction(normalizedBaseUrl, cookies, "CancelOrder", poNumber);
-        if (!cancelOriginal.ok) {
-          throw new Error(`Failed to cancel original PO ${poNumber}: ${cancelOriginal.body}`);
-        }
+        const cancelWarning = cancelOriginal.ok ? null
+          : `Note: Could not cancel original PO ${poNumber} in Acumatica (${cancelOriginal.body.includes("disabled") ? "PO has receipts or bills — cancel manually in Acumatica" : cancelOriginal.body})`;
 
         // 3. Create new PO with markup, new vendor, and copied VendorRef
         const createUrl = `${normalizedBaseUrl}/entity/Default/25.200.001/PurchaseOrder`;
@@ -529,17 +528,36 @@ async function startServer() {
           }
         }
 
-        return { 
-          message: "PO reissued successfully", 
-          originalPo: poNumber, 
+        return {
+          message: "PO reissued successfully",
+          originalPo: poNumber,
           newPo: newPoNbr,
-          vendorRef: vendorRef
+          vendorRef: vendorRef,
+          cancelWarning: cancelWarning
         };
       });
 
       res.json(result);
     } catch (error) {
       console.error("PO Reissue error:", error);
+      res.status(500).json({ error: error instanceof Error ? error.message : "Internal Server Error" });
+    }
+  });
+
+  // One-shot cancel endpoint — for manually cancelling a PO in Acumatica
+  app.post("/api/acumatica/po/cancel-only", express.json(), async (req, res) => {
+    const { poNumber } = req.body;
+    if (!poNumber) return res.status(400).json({ error: "poNumber is required" });
+    const { baseUrl } = getAcumaticaConfig();
+    const normalizedBaseUrl = baseUrl.replace(/\/$/, "");
+    try {
+      const result = await withAcumatica(async (cookies) => {
+        await callPurchaseOrderAction(normalizedBaseUrl, cookies, "RemoveHold", poNumber);
+        const r = await callPurchaseOrderAction(normalizedBaseUrl, cookies, "CancelOrder", poNumber);
+        return { ok: r.ok, status: r.status, body: r.body };
+      });
+      res.json(result);
+    } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : "Internal Server Error" });
     }
   });
@@ -553,10 +571,15 @@ async function startServer() {
     const isBenignRollbackFailure = (action: string, responseText: string) => {
       const text = responseText.toLowerCase();
       if (action === "CancelOrder") {
-        return text.includes("already cancelled") || text.includes("already canceled");
+        return (
+          text.includes("already cancelled") ||
+          text.includes("already canceled") ||
+          text.includes("cancel order button is disabled") ||
+          text.includes("pxactiondisabledexception")
+        );
       }
       if (action === "ReopenOrder") {
-        return text.includes("already open");
+        return text.includes("already open") || text.includes("reopen order button is disabled");
       }
       return false;
     };
@@ -573,7 +596,7 @@ async function startServer() {
           if (!cancelR.ok && !isBenignRollbackFailure("CancelOrder", cancelR.body)) {
             throw new Error(`Rollback failed cancelling reissued PO ${reissuedPoNumber}: ${cancelR.body}`);
           }
-          log.push(`CancelOrder ${reissuedPoNumber}: ${cancelR.ok ? "success" : "already cancelled"}`);
+          log.push(`CancelOrder ${reissuedPoNumber}: ${cancelR.ok ? "success" : "not cancellable in current status"}`);
         }
 
         // 2. Reopen the original PO (hard requirement unless already open)
@@ -589,7 +612,24 @@ async function startServer() {
       res.json(result);
     } catch (error) {
       console.error("PO Rollback error:", error);
-      res.status(500).json({ error: error instanceof Error ? error.message : "Internal Server Error" });
+      const errorMessage = error instanceof Error ? error.message : "Internal Server Error";
+      const normalized = errorMessage.toLowerCase();
+
+      const cancelDisabled =
+        normalized.includes("rollback failed cancelling reissued po") &&
+        (normalized.includes("cancel order button is disabled") || normalized.includes("pxactiondisabledexception"));
+      const reopenDisabled =
+        normalized.includes("rollback failed reopening original po") &&
+        (normalized.includes("reopen order button is disabled") || normalized.includes("pxactiondisabledexception"));
+
+      if (cancelDisabled || reopenDisabled) {
+        const actionText = reissuedPoNumber
+          ? `Action required in Acumatica: open PO ${reissuedPoNumber} and click Cancel Order, then open PO ${originalPoNumber} and click Reopen Order. After that, run Rollback again in the portal.`
+          : `Action required in Acumatica: open PO ${originalPoNumber} and click Reopen Order. After that, run Rollback again in the portal.`;
+        return res.status(409).json({ error: actionText });
+      }
+
+      res.status(500).json({ error: errorMessage });
     }
   });
 
