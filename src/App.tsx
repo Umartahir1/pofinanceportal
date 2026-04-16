@@ -1600,7 +1600,7 @@ export default function App() {
 
                   <p className="text-center text-[11px] text-zinc-500 font-mono leading-relaxed">
                     Google sign-in is for admins only ({ADMIN_EMAIL_DOMAIN}).<br />
-                    External vendors: use <span className="font-bold text-ink">Register Entity</span> and sign in with email/password.
+                    External lenders: use <span className="font-bold text-ink">Register Entity</span> and sign in with email/password.
                   </p>
 
                   <div className="pt-3 flex justify-center">
@@ -2327,7 +2327,7 @@ export default function App() {
                               {filterDropdownOpen && (
                                 <div className="absolute top-full right-0 mt-1 w-28 bg-white border border-stone-200 rounded-lg shadow-lg z-50 p-0.5">
                                   {['All', 'Published', 'Hidden', 'Funded(Original)', 'Funded'].map(v => (
-                                    <label key={v} className="flex items-center gap-1 px-1.5 py-0.5 hover:bg-stone-50 rounded cursor-pointer group">
+                                    <label key={v} className="!m-0 flex items-center gap-1 px-1.5 py-0.5 hover:bg-stone-50 rounded cursor-pointer group">
                                       <input
                                         type="checkbox"
                                         checked={v === 'All' ? visibilityFilter.length === 4 : visibilityFilter.includes(v)}
@@ -2342,7 +2342,7 @@ export default function App() {
                                             }
                                           }
                                         }}
-                                        className="w-3 h-3 shrink-0 rounded-[2px] border-stone-300 text-ink focus:ring-ink"
+                                        className="!m-0 !w-3 !h-3 !min-h-0 !p-0 shrink-0 rounded-[2px] border-stone-300 text-ink focus:ring-ink"
                                       />
                                       <span className="text-[7px] font-mono uppercase tracking-wider text-stone-600 group-hover:text-ink truncate">{v}</span>
                                     </label>
@@ -2561,7 +2561,7 @@ export default function App() {
                               {legalDropdownOpen && (
                                 <div className="absolute top-full right-0 mt-1 w-32 bg-white border border-stone-200 rounded-lg shadow-lg z-50 p-0.5">
                                   {['All', 'Funded(Original)', 'Funded'].map(v => (
-                                    <label key={v} className="flex items-center gap-1 px-1.5 py-0.5 hover:bg-stone-50 rounded cursor-pointer group">
+                                    <label key={v} className="!m-0 flex items-center gap-1 px-1.5 py-0.5 hover:bg-stone-50 rounded cursor-pointer group">
                                       <input
                                         type="checkbox"
                                         checked={legalFilter.includes(v)}
@@ -2576,7 +2576,7 @@ export default function App() {
                                             }
                                           }
                                         }}
-                                        className="w-3 h-3 shrink-0 rounded-[2px] border-stone-300 text-ink focus:ring-ink"
+                                        className="!m-0 !w-3 !h-3 !min-h-0 !p-0 shrink-0 rounded-[2px] border-stone-300 text-ink focus:ring-ink"
                                       />
                                       <span className="text-[7px] font-mono uppercase tracking-wider text-stone-600 group-hover:text-ink truncate">{v}</span>
                                     </label>
