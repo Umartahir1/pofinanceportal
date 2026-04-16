@@ -200,3 +200,55 @@ button:disabled {
 .nav-home-button:hover::after {
   @apply opacity-[0.03];
 }
+
+/* Compact, fixed-layout filter checkbox rows */
+.filter-option {
+  margin: 0 !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  padding: 4px 6px !important;
+  cursor: pointer;
+  border-radius: 6px;
+}
+
+.filter-checkbox {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 12px !important;
+  height: 12px !important;
+  min-height: 12px !important;
+  max-height: 12px !important;
+  flex: 0 0 12px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 1px solid #9ca3af;
+  border-radius: 2px;
+  background: #ffffff;
+  display: inline-grid;
+  place-content: center;
+  cursor: pointer;
+}
+
+.filter-checkbox:checked {
+  background: #22c55e;
+  border-color: #16a34a;
+}
+
+.filter-checkbox:checked::after {
+  content: '';
+  width: 6px;
+  height: 3px;
+  border-left: 1.6px solid #ffffff;
+  border-bottom: 1.6px solid #ffffff;
+  transform: rotate(-45deg) translateY(-1px);
+}
+
+/* Normalize dark button typography sizing */
+button[class*="bg-ink"] {
+  font-size: 12px !important;
+  letter-spacing: 0.1em !important;
+  line-height: 1.15 !important;
+  min-height: 42px !important;
+  padding: 10px 16px !important;
+}

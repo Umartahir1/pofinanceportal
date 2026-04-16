@@ -67,10 +67,18 @@ import { jsPDF } from 'jspdf';
 
 type UserRole = 'lender' | 'admin' | null;
 type AdminSubTab = 'inventory' | 'reservations' | 'legal' | 'finance';
+type AppUser = { email: string; role: UserRole; uid?: string } | null;
+type LenderNotificationType =
+  | 'po_status_updated'
+  | 'reservation_accepted'
+  | 'reservation_rejected'
+  | 'draft_contract_generated'
+  | 'signed_contract_added'
+  | 'payment_made';
 
 export default function App() {
   const ADMIN_EMAIL_DOMAIN = '@svjbrands.com';
-  const [user, setUser] = useState<{ email: string; role: UserRole } | null>(null);
+  const [user, setUser] = useState<AppUser>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [loginMode, setLoginMode] = useState<'login' | 'signup'>('login');
   const [emailInput, setEmailInput] = useState('');
@@ -281,9 +289,14 @@ export default function App() {
         })
         .reduce((acc, po) => acc + po.amount, 0);
     } else if (adminSubTab === 'reservations') {
-      total = reservations
-        .filter(r => r.status === 'Pending')
-        .reduce((acc, r) => acc + r.amount, 0);
+      const pendingReservations = reservations.filter(r => r.status === 'Pending');
+      const uniquePendingPoIds = [...new Set(pendingReservations.map(r => r.poId))];
+      total = uniquePendingPoIds.reduce((acc, poId) => {
+        const po = pos.find(p => p.id === poId);
+        if (po) return acc + po.amount;
+        const fallbackReservation = pendingReservations.find(r => r.poId === poId);
+        return acc + (fallbackReservation?.amount || 0);
+      }, 0);
     } else if (adminSubTab === 'legal') {
       total = reservations
         .filter(r => r.status === 'Accepted' && !pos.find(p => p.id === r.poId && (p.status === 'Funded' || p.status === 'Completed')))
@@ -470,17 +483,10 @@ export default function App() {
           .catch(err => handleFirestoreError(err, 'write', `purchaseOrders/${po.id}`));
       }
 
-      // Handle Closed POs: If they are in initial state, remove them. 
-      // If they are reserved/accepted/funded, keep them but mark as closed in Acumatica if needed.
+      // Strict mirror mode: remove platform POs that are no longer returned by Acumatica.
       for (const po of closedPOs) {
-        if (po.status === 'To be Shipped' && !po.reservedBy) {
-          // It was never reserved or published, just remove it as it's closed in Acumatica
-          await deleteDoc(doc(db, 'purchaseOrders', po.id))
-            .catch(err => handleFirestoreError(err, 'delete', `purchaseOrders/${po.id}`));
-        } else {
-          // It's in the platform workflow, keep it but maybe update status if it's not already funded
-          // For now, we just keep it as is to preserve the platform state
-        }
+        await deleteDoc(doc(db, 'purchaseOrders', po.id))
+          .catch(err => handleFirestoreError(err, 'delete', `purchaseOrders/${po.id}`));
       }
 
       // Save unique vendors
@@ -563,6 +569,17 @@ export default function App() {
     }
     return null;
   }, [user, investors]);
+
+  const pushLenderNotification = async (
+    _investorId: string | undefined,
+    _poId: string,
+    _poNumber: string | undefined,
+    _type: LenderNotificationType,
+    _message: string
+  ) => {
+    // Notifications intentionally disabled for now.
+    return;
+  };
 
   const handleLogin = async () => {
     try {
@@ -1104,6 +1121,14 @@ export default function App() {
       await setDoc(doc(db, 'purchaseOrders', reissuedPO.id), reissuedPO, { merge: true })
         .catch(err => handleFirestoreError(err, 'write', `purchaseOrders/${reissuedPO.id}`));
 
+      await pushLenderNotification(
+        contract.investorId,
+        reissuedPO.id,
+        reissuedPO.poNumber,
+        'po_status_updated',
+        `PO ${reissuedPO.poNumber} status updated to Funded.`
+      );
+
       // 5. Create a new contract for the new PO
       const newContractId = `con-${Math.random().toString(36).substr(2, 6).toUpperCase()}`;
       const newContract: Contract = {
@@ -1172,6 +1197,22 @@ export default function App() {
         await updateDoc(doc(db, 'reservations', resId), { status: 'Accepted' })
           .catch(err => handleFirestoreError(err, 'write', `reservations/${resId}`));
 
+        await pushLenderNotification(
+          reservation.investorId,
+          reservation.poId,
+          po.poNumber,
+          'reservation_accepted',
+          `Reservation accepted for PO ${po.poNumber}.`
+        );
+
+        await pushLenderNotification(
+          reservation.investorId,
+          reservation.poId,
+          po.poNumber,
+          'draft_contract_generated',
+          `Draft contract generated for PO ${po.poNumber}.`
+        );
+
         // 3. Reject all other pending reservations for the same PO
         const competingReservations = reservations.filter(
           r => r.poId === reservation.poId && r.id !== resId && r.status === 'Pending'
@@ -1183,9 +1224,23 @@ export default function App() {
           )
         );
 
+        await Promise.all(
+          competingReservations.map(r =>
+            pushLenderNotification(
+              r.investorId,
+              r.poId,
+              po.poNumber,
+              'reservation_rejected',
+              `Reservation rejected for PO ${po.poNumber} (another reservation was accepted).`
+            )
+          )
+        );
+
         // 4. Update PO
         await updateDoc(doc(db, 'purchaseOrders', reservation.poId), {
-          reservationStatus: 'Accepted'
+          reservationStatus: 'Accepted',
+          visibility: 'Hidden',
+          isPublished: false
         }).catch(err => handleFirestoreError(err, 'write', `purchaseOrders/${reservation.poId}`));
 
         alert('Reservation accepted and contract generated.');
@@ -1204,13 +1259,24 @@ export default function App() {
       try {
         await updateDoc(doc(db, 'reservations', resId), { status: 'Rejected' })
           .catch(err => handleFirestoreError(err, 'write', `reservations/${resId}`));
+
+        const po = pos.find(p => p.id === reservation.poId) || pos.find(p => p.reissuedPoId === reservation.poId);
+        await pushLenderNotification(
+          reservation.investorId,
+          reservation.poId,
+          po?.poNumber || reservation.poId,
+          'reservation_rejected',
+          `Reservation rejected for PO ${po?.poNumber || reservation.poId}.`
+        );
         
         const originalPo = pos.find(p => p.reissuedPoId === reservation.poId);
         const poIdToUpdate = originalPo ? originalPo.id : reservation.poId;
         
         await updateDoc(doc(db, 'purchaseOrders', poIdToUpdate), { 
           reservedBy: deleteField(), 
-          reservationStatus: deleteField() 
+          reservationStatus: deleteField(),
+          visibility: 'Hidden',
+          isPublished: false
         }).catch(err => handleFirestoreError(err, 'write', `purchaseOrders/${poIdToUpdate}`));
       } catch (error) {
         console.error('Error rejecting reservation:', error);
@@ -1398,12 +1464,28 @@ export default function App() {
       const totalDue = principal + interest;
       const remainingDue = roundToCents(totalDue - totalPaid);
 
+      await pushLenderNotification(
+        reservation.investorId,
+        poId,
+        po.poNumber,
+        'payment_made',
+        `Payment of $${formatCurrency(paymentAmount)} recorded for PO ${po.poNumber}.`
+      );
+
       if (remainingDue <= PAYMENT_CLOSE_EPSILON) {
         await updateDoc(doc(db, 'purchaseOrders', poId), { status: 'Completed' })
           .catch(err => handleFirestoreError(err, 'write', `purchaseOrders/${poId}`));
         
         await updateDoc(doc(db, 'reservations', reservation.id), { paymentStatus: 'Paid' })
           .catch(err => handleFirestoreError(err, 'write', `reservations/${reservation.id}`));
+
+        await pushLenderNotification(
+          reservation.investorId,
+          poId,
+          po.poNumber,
+          'po_status_updated',
+          `PO ${po.poNumber} status updated to Completed.`
+        );
       }
       
       alert('Payment recorded successfully.');
@@ -1473,6 +1555,14 @@ export default function App() {
           };
           await setDoc(doc(db, 'purchaseOrders', reissuedPoId), reissuedPOData, { merge: true })
             .catch(err => handleFirestoreError(err, 'write', `purchaseOrders/${reissuedPoId}`));
+
+          await pushLenderNotification(
+            contract.investorId,
+            reissuedPoId,
+            reissuedPoId,
+            'po_status_updated',
+            `PO ${reissuedPoId} status updated to Funded.`
+          );
         }
 
         // 3. Also ensure original PO is marked Funded(Original) and hidden
@@ -1484,6 +1574,14 @@ export default function App() {
           }).catch(err => handleFirestoreError(err, 'write', `purchaseOrders/${originalPoDoc.id}`));
         }
       }
+
+      await pushLenderNotification(
+        contract.investorId,
+        contract.poId,
+        contract.poId,
+        'signed_contract_added',
+        `Signed contract added for PO ${contract.poId}.`
+      );
 
       alert('Signed agreement uploaded. The PO is now visible in Financials.');
     } catch (error: any) {
@@ -1724,7 +1822,7 @@ export default function App() {
               <p className="mono-label mb-4">Lender Terminal</p>
               <h1 className="display-text text-3xl md:text-4xl">Portfolio <span className="italic font-serif">Overview</span></h1>
             </div>
-            <div className="flex flex-wrap gap-8 md:gap-16 items-end">
+            <div className="flex flex-wrap gap-6 md:gap-10 items-end">
               <div className="flex gap-6 md:gap-10 mb-2 border-b border-stone-200/60">
                 {[
                   { id: 'marketplace', label: 'Marketplace' },
@@ -1798,9 +1896,11 @@ export default function App() {
                 (po.status === 'To be Shipped' || po.reservedBy) &&
                 (po.vendorName?.toLowerCase().includes(searchTerm.toLowerCase()) || po.vendor.toLowerCase().includes(searchTerm.toLowerCase()) || po.poNumber.toLowerCase().includes(searchTerm.toLowerCase()))
               ).map(po => {
-                const reservation = reservations.find(r => r.poId === po.id && r.status !== 'Rejected');
-                const isReservedByMe = reservation?.investorId === currentLender?.id;
-                const isReservedByOther = reservation && !isReservedByMe;
+                const activeReservations = reservations.filter(r => r.poId === po.id && r.status !== 'Rejected');
+                const reservation = activeReservations[0];
+                const hasAnyActiveReservation = activeReservations.length > 0;
+                const isReservedByMe = activeReservations.some(r => r.investorId === currentLender?.id);
+                const isReservedByOther = hasAnyActiveReservation && !isReservedByMe;
 
                 return (
                   <motion.div 
@@ -1818,9 +1918,15 @@ export default function App() {
                       <p className="text-base font-bold tracking-tight text-ink">{po.vendorName || po.vendor}</p>
                     </div>
                     <div>
-                      <span className={`status-pill ${isReservedByMe ? 'status-emerald' : isReservedByOther ? 'status-amber' : 'status-zinc'}`}>
-                        {po.status === 'To be Shipped' ? (reservation ? 'RESERVED' : 'OPEN') : 'RESERVED'}
-                      </span>
+                      <div className="inline-flex items-center gap-2">
+                        <span className={`status-pill ${isReservedByMe ? 'status-emerald' : isReservedByOther ? 'status-amber' : 'status-zinc'}`}>
+                          {po.status === 'To be Shipped' ? (hasAnyActiveReservation ? 'RESERVED' : 'OPEN') : 'RESERVED'}
+                        </span>
+                        <span
+                          className={`w-2.5 h-2.5 rounded-full border ${isReservedByMe ? 'bg-emerald-500 border-emerald-500' : 'bg-transparent border-zinc-400'}`}
+                          title={isReservedByMe ? 'You reserved this PO' : 'No reservation placed by you'}
+                        />
+                      </div>
                     </div>
                     <div className="mono-value text-emerald-600 font-bold">
                       {reservation ? `+${reservation.paymentOption.interest}%` : 'Up to 10%'}
@@ -2273,6 +2379,41 @@ export default function App() {
           >
             {adminSubTab === 'inventory' && (
               <div className="space-y-6">
+                <div className="flex justify-end">
+                  <div className="relative">
+                    <button
+                      onClick={() => setFilterDropdownOpen(!filterDropdownOpen)}
+                      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded text-[10px] font-mono uppercase tracking-[0.15em] border border-stone-200 text-stone-600 hover:bg-stone-50 transition-all bg-white"
+                    >
+                      <Filter size={10} />
+                      Visibility
+                      <ChevronDown size={10} className={`transition-transform ${filterDropdownOpen ? 'rotate-180' : ''}`} />
+                    </button>
+                    {filterDropdownOpen && (
+                      <div className="absolute top-full right-0 mt-1 w-40 bg-white border border-stone-200 rounded-lg shadow-lg z-50 p-1">
+                        {['All', 'Published', 'Hidden', 'Funded(Original)', 'Funded'].map(v => (
+                          <label key={v} className="filter-option group">
+                            <input
+                              type="checkbox"
+                              checked={v === 'All' ? visibilityFilter.length === 4 : visibilityFilter.includes(v)}
+                              onChange={() => {
+                                if (v === 'All') {
+                                  setVisibilityFilter(visibilityFilter.length === 4 ? [] : ['Published', 'Hidden', 'Funded(Original)', 'Funded']);
+                                } else if (visibilityFilter.includes(v)) {
+                                  setVisibilityFilter(visibilityFilter.filter(f => f !== v));
+                                } else {
+                                  setVisibilityFilter([...visibilityFilter, v]);
+                                }
+                              }}
+                              className="filter-checkbox"
+                            />
+                            <span className="text-[10px] font-mono uppercase tracking-[0.12em] text-stone-600 group-hover:text-ink truncate">{v}</span>
+                          </label>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
                 <div className="premium-card overflow-x-auto">
                   <table className="w-full text-left border-collapse min-w-[1200px]">
                     <thead>
@@ -2311,46 +2452,6 @@ export default function App() {
                           <div className="flex items-center gap-2">
                             Visibility
                             {sortConfig.key === 'visibility' && (sortConfig.direction === 'asc' ? <ArrowUp size={12} /> : sortConfig.direction === 'desc' ? <ArrowDown size={12} /> : null)}
-                          </div>
-                        </th>
-                        <th className="px-6 py-4 text-right">
-                          <div className="flex items-center justify-end gap-3">
-                            <div className="relative">
-                              <button
-                                onClick={() => setFilterDropdownOpen(!filterDropdownOpen)}
-                                className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[7px] font-mono uppercase tracking-widest border border-stone-200 text-stone-500 hover:bg-stone-50 transition-all bg-white"
-                              >
-                                <Filter size={7} />
-                                Visibility
-                                <ChevronDown size={7} className={`transition-transform ${filterDropdownOpen ? 'rotate-180' : ''}`} />
-                              </button>
-                              {filterDropdownOpen && (
-                                <div className="absolute top-full right-0 mt-1 w-28 bg-white border border-stone-200 rounded-lg shadow-lg z-50 p-0.5">
-                                  {['All', 'Published', 'Hidden', 'Funded(Original)', 'Funded'].map(v => (
-                                    <label key={v} className="!m-0 flex items-center gap-1 px-1.5 py-0.5 hover:bg-stone-50 rounded cursor-pointer group">
-                                      <input
-                                        type="checkbox"
-                                        checked={v === 'All' ? visibilityFilter.length === 4 : visibilityFilter.includes(v)}
-                                        onChange={() => {
-                                          if (v === 'All') {
-                                            setVisibilityFilter(visibilityFilter.length === 4 ? [] : ['Published', 'Hidden', 'Funded(Original)', 'Funded']);
-                                          } else {
-                                            if (visibilityFilter.includes(v)) {
-                                              setVisibilityFilter(visibilityFilter.filter(f => f !== v));
-                                            } else {
-                                              setVisibilityFilter([...visibilityFilter, v]);
-                                            }
-                                          }
-                                        }}
-                                        className="!m-0 !w-3 !h-3 !min-h-0 !p-0 shrink-0 rounded-[2px] border-stone-300 text-ink focus:ring-ink"
-                                      />
-                                      <span className="text-[7px] font-mono uppercase tracking-wider text-stone-600 group-hover:text-ink truncate">{v}</span>
-                                    </label>
-                                  ))}
-                                </div>
-                              )}
-                            </div>
-                            <span>Actions</span>
                           </div>
                         </th>
                       </tr>
@@ -2408,11 +2509,6 @@ export default function App() {
                               <option value="Funded(Original)">Funded(Original)</option>
                               <option value="Funded">Funded</option>
                             </select>
-                          </td>
-                          <td className="px-6 py-4 text-right">
-                            <button className="text-stone-300 hover:text-ink transition-colors p-1.5 hover:bg-stone-50 rounded-full">
-                              <ChevronRight size={16} />
-                            </button>
                           </td>
                         </tr>
                       ))}
@@ -2519,6 +2615,41 @@ export default function App() {
 
             {adminSubTab === 'legal' && (
               <div className="space-y-10">
+                <div className="flex justify-end">
+                  <div className="relative">
+                    <button
+                      onClick={() => setLegalDropdownOpen(!legalDropdownOpen)}
+                      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded text-[10px] font-mono uppercase tracking-[0.15em] border border-stone-200 text-stone-600 hover:bg-stone-50 transition-all bg-white"
+                    >
+                      <Filter size={10} />
+                      Status
+                      <ChevronDown size={10} className={`transition-transform ${legalDropdownOpen ? 'rotate-180' : ''}`} />
+                    </button>
+                    {legalDropdownOpen && (
+                      <div className="absolute top-full right-0 mt-1 w-44 bg-white border border-stone-200 rounded-lg shadow-lg z-50 p-1">
+                        {['All', 'Funded(Original)', 'Funded'].map(v => (
+                          <label key={v} className="filter-option group">
+                            <input
+                              type="checkbox"
+                              checked={legalFilter.includes(v)}
+                              onChange={() => {
+                                if (v === 'All') {
+                                  setLegalFilter(legalFilter.includes('All') ? [] : ['All', 'Funded(Original)', 'Funded']);
+                                } else if (legalFilter.includes(v)) {
+                                  setLegalFilter(legalFilter.filter(f => f !== v && f !== 'All'));
+                                } else {
+                                  setLegalFilter([...legalFilter.filter(f => f !== 'All'), v]);
+                                }
+                              }}
+                              className="filter-checkbox"
+                            />
+                            <span className="text-[10px] font-mono uppercase tracking-[0.12em] text-stone-600 group-hover:text-ink truncate">{v}</span>
+                          </label>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
                 <div className="premium-card overflow-hidden">
                   <table className="w-full text-left border-collapse">
                     <thead>
@@ -2549,41 +2680,6 @@ export default function App() {
                         </th>
                         <th className="px-10 py-6 text-right">
                           <div className="flex items-center justify-end gap-3">
-                            <div className="relative">
-                              <button
-                                onClick={() => setLegalDropdownOpen(!legalDropdownOpen)}
-                                className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[7px] font-mono uppercase tracking-widest border border-stone-200 text-stone-500 hover:bg-stone-50 transition-all bg-white"
-                              >
-                                <Filter size={7} />
-                                Status
-                                <ChevronDown size={7} className={`transition-transform ${legalDropdownOpen ? 'rotate-180' : ''}`} />
-                              </button>
-                              {legalDropdownOpen && (
-                                <div className="absolute top-full right-0 mt-1 w-32 bg-white border border-stone-200 rounded-lg shadow-lg z-50 p-0.5">
-                                  {['All', 'Funded(Original)', 'Funded'].map(v => (
-                                    <label key={v} className="!m-0 flex items-center gap-1 px-1.5 py-0.5 hover:bg-stone-50 rounded cursor-pointer group">
-                                      <input
-                                        type="checkbox"
-                                        checked={legalFilter.includes(v)}
-                                        onChange={() => {
-                                          if (v === 'All') {
-                                            setLegalFilter(legalFilter.includes('All') ? [] : ['All', 'Funded(Original)', 'Funded']);
-                                          } else {
-                                            if (legalFilter.includes(v)) {
-                                              setLegalFilter(legalFilter.filter(f => f !== v && f !== 'All'));
-                                            } else {
-                                              setLegalFilter([...legalFilter.filter(f => f !== 'All'), v]);
-                                            }
-                                          }
-                                        }}
-                                        className="!m-0 !w-3 !h-3 !min-h-0 !p-0 shrink-0 rounded-[2px] border-stone-300 text-ink focus:ring-ink"
-                                      />
-                                      <span className="text-[7px] font-mono uppercase tracking-wider text-stone-600 group-hover:text-ink truncate">{v}</span>
-                                    </label>
-                                  ))}
-                                </div>
-                              )}
-                            </div>
                             <span>Actions</span>
                           </div>
                         </th>
@@ -2633,7 +2729,7 @@ export default function App() {
                                           link.click();
                                         }
                                       }}
-                                      className="btn-ghost text-ink hover:bg-stone-100 flex items-center gap-2"
+                                      className="btn-ghost !text-[11px] !font-semibold !tracking-[0.08em] !px-3 !py-2 text-ink hover:bg-stone-100 flex items-center gap-2"
                                     >
                                       <FileText size={14} />
                                       Download Unsigned
@@ -2642,7 +2738,7 @@ export default function App() {
                                       <>
                                         <button
                                           onClick={() => handleFinalizeContract(contract.id)}
-                                          className="btn-ghost !text-[10px] !px-3 !py-1.5 border border-ink/10 hover:bg-emerald-50 hover:text-emerald-600 hover:border-emerald-200"
+                                          className="btn-ghost !text-[11px] !font-semibold !tracking-[0.08em] !px-3 !py-2 border border-ink/10 hover:bg-emerald-50 hover:text-emerald-600 hover:border-emerald-200"
                                         >
                                           Finalize & Re-issue PO
                                         </button>
@@ -2659,27 +2755,12 @@ export default function App() {
                                           }
                                         }
                                       }}
-                                      className="btn-ghost !text-[9px] !px-2 !py-1 text-rose-600 hover:bg-rose-50"
+                                      title="Delete contract"
+                                      aria-label="Delete contract"
+                                      className="btn-ghost !w-9 !h-9 !min-h-0 !p-0 text-rose-600 hover:bg-rose-50 border border-rose-200"
                                     >
-                                      Delete
+                                      <Trash2 size={14} />
                                     </button>
-                                    {contracts.some(c => c.originalPoId === contract.id) && (
-                                      <button
-                                        onClick={async () => {
-                                          if (confirm('This will permanently delete both the original and reissued contract records from Legal.\n\nThis action is irreversible.\n\nProceed?')) {
-                                            try {
-                                              await deleteContracts(getRelatedContractIds(contract));
-                                            } catch (err) {
-                                              console.error('Error deleting contract pair:', err);
-                                              handleFirestoreError(err, 'delete', `contracts/${contract.id}`);
-                                            }
-                                          }
-                                        }}
-                                        className="btn-ghost !text-[9px] !px-2 !py-1 text-rose-700 hover:bg-rose-50 border border-rose-200"
-                                      >
-                                        Delete Both
-                                      </button>
-                                    )}
                                   </>
                                 ) : (
                                   /* ── NEW CONTRACT (post-finalize): Upload/View Signed + Rollback ── */
@@ -2692,7 +2773,7 @@ export default function App() {
                                           link.download = `signed-contract-${contract.id}.pdf`;
                                           link.click();
                                         }}
-                                        className="btn-ghost text-emerald-600 hover:bg-emerald-50 flex items-center gap-2"
+                                        className="btn-ghost !text-[11px] !font-semibold !tracking-[0.08em] !px-3 !py-2 text-emerald-600 hover:bg-emerald-50 flex items-center gap-2"
                                       >
                                         <ShieldCheck size={14} />
                                         View Signed
@@ -2711,10 +2792,10 @@ export default function App() {
                                               handleSignContract(contract.id, reader.result as string);
                                             };
                                             reader.readAsDataURL(file);
-                                          };
+                                            };
                                           input.click();
                                         }}
-                                        className="btn-premium flex items-center gap-2"
+                                        className="btn-premium !text-[11px] !font-semibold !tracking-[0.08em] !px-3 !py-2 flex items-center gap-2"
                                       >
                                         <Upload size={14} />
                                         Upload Signed contract
@@ -2806,7 +2887,7 @@ export default function App() {
                                           }
                                         }
                                       }}
-                                      className="btn-ghost !text-[10px] !px-3 !py-1.5 text-amber-600 hover:bg-amber-50 border border-amber-200"
+                                      className="btn-ghost !text-[11px] !font-semibold !tracking-[0.08em] !px-3 !py-2 text-amber-600 hover:bg-amber-50 border border-amber-200"
                                     >
                                       ↩ Rollback Acumatica
                                     </button>
@@ -2821,24 +2902,11 @@ export default function App() {
                                           }
                                         }
                                       }}
-                                      className="btn-ghost !text-[9px] !px-2 !py-1 text-rose-600 hover:bg-rose-50"
+                                      title="Delete contract"
+                                      aria-label="Delete contract"
+                                      className="btn-ghost !w-9 !h-9 !min-h-0 !p-0 text-rose-600 hover:bg-rose-50 border border-rose-200"
                                     >
-                                      Delete
-                                    </button>
-                                    <button
-                                      onClick={async () => {
-                                        if (confirm('This will permanently delete both the original and reissued contract records from Legal.\n\nThis action is irreversible.\n\nProceed?')) {
-                                          try {
-                                            await deleteContracts(getRelatedContractIds(contract));
-                                          } catch (err) {
-                                            console.error('Error deleting contract pair:', err);
-                                            handleFirestoreError(err, 'delete', `contracts/${contract.id}`);
-                                          }
-                                        }
-                                      }}
-                                      className="btn-ghost !text-[9px] !px-2 !py-1 text-rose-700 hover:bg-rose-50 border border-rose-200"
-                                    >
-                                      Delete Both
+                                      <Trash2 size={14} />
                                     </button>
                                   </>
                                 )}
@@ -2972,9 +3040,11 @@ export default function App() {
                                       e.stopPropagation();
                                       setSelectedFundedPO(po);
                                     }}
-                                    className="btn-ghost !text-[10px] !px-3 !py-1.5"
+                                    title="Open details"
+                                    aria-label="Open details"
+                                    className="btn-ghost !w-9 !h-9 !min-h-0 !p-0"
                                   >
-                                    Details
+                                    <ChevronRight size={14} />
                                   </button>
                                 </div>
                               </td>
