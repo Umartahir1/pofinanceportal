@@ -69,6 +69,7 @@ type UserRole = 'lender' | 'admin' | null;
 type AdminSubTab = 'inventory' | 'reservations' | 'legal' | 'finance';
 
 export default function App() {
+  const ADMIN_EMAIL_DOMAIN = '@svjbrands.com';
   const [user, setUser] = useState<{ email: string; role: UserRole } | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [loginMode, setLoginMode] = useState<'login' | 'signup'>('login');
@@ -232,7 +233,20 @@ export default function App() {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser && firebaseUser.email) {
         const email = firebaseUser.email.toLowerCase();
-        const role: UserRole = email.endsWith('@svjbrands.com') ? 'admin' : 'lender';
+        const isAdminEmail = email.endsWith(ADMIN_EMAIL_DOMAIN);
+        const signedInWithGoogle = firebaseUser.providerData.some(
+          provider => provider?.providerId === GoogleAuthProvider.PROVIDER_ID
+        );
+
+        // Enforce Google SSO for internal admins only.
+        if (signedInWithGoogle && !isAdminEmail) {
+          await signOut(auth);
+          setUser(null);
+          setAuthLoading(false);
+          return;
+        }
+
+        const role: UserRole = isAdminEmail ? 'admin' : 'lender';
         const userData = { email: firebaseUser.email, role, uid: firebaseUser.uid };
         setUser(userData as any);
 
@@ -552,7 +566,15 @@ export default function App() {
 
   const handleLogin = async () => {
     try {
-      await signInWithPopup(auth, googleProvider);
+      const result = await signInWithPopup(auth, googleProvider);
+      const email = result.user.email?.toLowerCase() || '';
+      const isAdminEmail = email.endsWith(ADMIN_EMAIL_DOMAIN);
+
+      if (!isAdminEmail) {
+        await signOut(auth);
+        alert(`Google sign-in is restricted to ${ADMIN_EMAIL_DOMAIN} accounts. Vendors must use Register Entity and email/password sign-in.`);
+        return;
+      }
     } catch (error) {
       console.error('Login error:', error);
       alert('Failed to sign in with Google. Please try again.');
@@ -1576,9 +1598,20 @@ export default function App() {
                     </button>
                   </div>
 
-                  <p className="text-center text-xs text-zinc-400 font-mono mt-6">
-                    New vendor? <button onClick={() => setLoginMode('signup')} className="text-ink font-bold hover:underline">Register Entity</button>
+                  <p className="text-center text-[11px] text-zinc-500 font-mono leading-relaxed">
+                    Google sign-in is for admins only ({ADMIN_EMAIL_DOMAIN}).<br />
+                    External vendors: use <span className="font-bold text-ink">Register Entity</span> and sign in with email/password.
                   </p>
+
+                  <div className="pt-3 flex justify-center">
+                    <button
+                      type="button"
+                      onClick={() => setLoginMode('signup')}
+                      className="px-6 py-2.5 rounded-[0.95rem] border border-stone-200 text-ink text-xs font-bold uppercase tracking-wider hover:bg-stone-50 transition-all"
+                    >
+                      Register Entity
+                    </button>
+                  </div>
                 </>
               ) : (
                 <form onSubmit={handleSignup} className="space-y-5">
@@ -2309,7 +2342,7 @@ export default function App() {
                                             }
                                           }
                                         }}
-                                        className="w-2 h-2 rounded-sm border-stone-300 text-ink focus:ring-ink"
+                                        className="w-3 h-3 shrink-0 rounded-[2px] border-stone-300 text-ink focus:ring-ink"
                                       />
                                       <span className="text-[7px] font-mono uppercase tracking-wider text-stone-600 group-hover:text-ink truncate">{v}</span>
                                     </label>
@@ -2543,7 +2576,7 @@ export default function App() {
                                             }
                                           }
                                         }}
-                                        className="w-2 h-2 rounded-sm border-stone-300 text-ink focus:ring-ink"
+                                        className="w-3 h-3 shrink-0 rounded-[2px] border-stone-300 text-ink focus:ring-ink"
                                       />
                                       <span className="text-[7px] font-mono uppercase tracking-wider text-stone-600 group-hover:text-ink truncate">{v}</span>
                                     </label>
